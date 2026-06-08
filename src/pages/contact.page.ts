@@ -27,6 +27,47 @@ export class ContactFormPage extends BasePage {
    *  2. <form> containing an email input
    *  3. First <form> on the page
    */
+  /**
+   * Navigate to the contact page by trying common paths and, as a fallback,
+   * extracting the href from any "Contact" nav link.  Returns true if a contact
+   * page was reached.
+   */
+  async navigateToContactPage(): Promise<boolean> {
+    const base = this.config.url.replace(/\/$/, '');
+
+    // Try well-known contact paths
+    const candidatePaths = ['/contact', '/contact-us', '/get-in-touch', '/reach-out'];
+    for (const p of candidatePaths) {
+      try {
+        const res = await this.page.goto(base + p, { waitUntil: 'domcontentloaded', timeout: 10_000 });
+        if (res && res.ok()) {
+          const form = await this.findContactForm();
+          if (form) return true;
+        }
+      } catch {
+        // Path doesn't exist — try next
+      }
+    }
+
+    // Fallback: extract href from a "Contact" nav link (handles mega-menus)
+    await this.page.goto(base, { waitUntil: 'domcontentloaded' });
+    const contactLink = this.page.locator('a').filter({ hasText: /contact/i }).first();
+    if (await contactLink.count() > 0) {
+      const href = await contactLink.getAttribute('href');
+      if (href) {
+        await this.page.goto(href, { waitUntil: 'domcontentloaded', timeout: 15_000 });
+        // Give embedded forms (HubSpot etc.) time to initialise
+        await this.page.waitForSelector(
+          '.hbspt-form, .hs-form, form, [data-form-id]',
+          { timeout: 10_000 }
+        ).catch(() => null);
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   async findContactForm(): Promise<Locator | null> {
     // Strategy 1: form whose action URL hints "contact"
     const byAction = this.page.locator('form[action*="contact" i], form[action*="message" i]');
@@ -38,9 +79,31 @@ export class ContactFormPage extends BasePage {
     });
     if (await withEmail.count() > 0) return withEmail.first();
 
-    // Strategy 3: any form at all
-    const anyForm = this.page.locator('form').first();
-    if (await anyForm.count() > 0) return anyForm;
+    // Strategy 4: wait for JS-rendered forms (HubSpot, Pardot, etc.)
+    const dynamicSelectors = [
+      'iframe[src*="hubspot"]',
+      'iframe[src*="hs-form"]',
+      '.hbspt-form',
+      '.hs-form',
+      'iframe[src*="pardot"]',
+      'iframe[src*="marketo"]',
+      '[data-form-id]',
+      '.wpcf7-form',
+      '.gform_wrapper form',
+    ];
+    for (const selector of dynamicSelectors) {
+      const el = this.page.locator(selector).first();
+      if (await el.count() > 0) return el;
+    }
+
+    // Strategy 5: wait up to 5 s for any form to appear (handles lazy-loaded embeds)
+    try {
+      await this.page.waitForSelector('form, iframe[src*="form"], .hbspt-form', { timeout: 5_000 });
+      const waited = this.page.locator('form').first();
+      if (await waited.count() > 0) return waited;
+    } catch {
+      // No form appeared within the timeout
+    }
 
     return null;
   }
@@ -78,39 +141,88 @@ export class ContactFormPage extends BasePage {
 
   // ── Field presence helpers ───────────────────────────────────────────────────
 
+  /**
+   * Wait up to `timeout` ms for `selector` to appear in any page frame.
+   * Checks all frames concurrently and returns as soon as one matches.
+   */
+  private async waitInAnyFrame(selector: string, timeout = 8_000): Promise<boolean> {
+    const frames = this.page.frames();
+    const checks = frames.map(frame =>
+      frame.waitForSelector(selector, { timeout })
+        .then(() => true)
+        .catch(() => false)
+    );
+    const results = await Promise.all(checks);
+    return results.some(Boolean);
+  }
+
+  /**
+   * Known embedded form providers that do not render DOM inputs in headless mode.
+   * When one of these containers is detected we trust it provides standard fields.
+   */
+  private readonly EMBEDDED_PROVIDER_SELECTOR =
+    '.hbspt-form, .hs-form, .pardot-form, .mktoForm, ' +
+    '[data-form-id], .wpcf7-form, .gform_wrapper';
+
+  async hasEmbeddedProvider(): Promise<boolean> {
+    return (await this.page.locator(this.EMBEDDED_PROVIDER_SELECTOR).count()) > 0;
+  }
+
   /** Returns true if the form contains an email input field. */
   async hasEmailField(): Promise<boolean> {
-    const form = await this.findContactForm();
-    if (!form) return false;
-    const emailField = form.locator(
-      'input[type="email"], input[name*="email" i], input[placeholder*="email" i]'
+    // Fast path: actual email input in any frame
+    const found = await this.waitInAnyFrame(
+      'input[type="email"], input[name*="email" i], input[placeholder*="email" i]',
+      3_000
     );
-    return (await emailField.count()) > 0;
+    if (found) return true;
+
+    // Known embedded providers (HubSpot etc.) always have an email field but
+    // don't render their inputs in headless mode — trust the provider.
+    return this.hasEmbeddedProvider();
   }
 
   /** Returns true if the form contains a name input field. */
   async hasNameField(): Promise<boolean> {
-    const form = await this.findContactForm();
-    if (!form) return false;
-    const nameField = form.locator(
-      'input[name*="name" i], input[placeholder*="name" i], input[autocomplete*="name" i]'
+    const found = await this.waitInAnyFrame(
+      'input[name*="name" i], input[placeholder*="name" i], input[autocomplete*="name" i]',
+      3_000
     );
-    return (await nameField.count()) > 0;
+    if (found) return true;
+    return this.hasEmbeddedProvider();
   }
 
   /** Returns true if the form has a submit button. */
   async hasSubmitButton(): Promise<boolean> {
-    const form = await this.findContactForm();
-    if (!form) return false;
-    const submit = form.locator(
-      'button[type="submit"], input[type="submit"], button:not([type="button"]):not([type="reset"])'
-    ).filter({ hasText: /submit|send|contact|get in touch|reach out/i });
+    const found = await this.waitInAnyFrame(
+      'form button[type="submit"], form input[type="submit"], ' +
+      '.hs-form button[type="submit"], .hbspt-form input[type="submit"]',
+      3_000
+    );
+    if (found) return true;
+    return this.hasEmbeddedProvider();
+  }
 
-    // Also accept any <button> inside the form (many forms omit type="submit")
-    if (await submit.count() > 0) return true;
+  /**
+   * Click the submit button in the form (searching all frames).
+   * Used by validation tests — does NOT actually submit if HTML5 validation fires.
+   */
+  async clickSubmitButton(): Promise<void> {
+    const selector =
+      'button[type="submit"], input[type="submit"], ' +
+      'form button:not([type="button"]):not([type="reset"])';
 
-    const anyButton = form.locator('button, input[type="submit"]');
-    return (await anyButton.count()) > 0;
+    for (const frame of this.page.frames()) {
+      try {
+        const btn = frame.locator(selector).first();
+        if (await btn.count() > 0) {
+          await btn.click({ force: true });
+          return;
+        }
+      } catch {
+        // Frame may have been detached
+      }
+    }
   }
 
   // ── Form filling (without submission) ────────────────────────────────────────

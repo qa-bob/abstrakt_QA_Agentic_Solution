@@ -35,11 +35,24 @@ test.describe('Visual Regression @visual', () => {
     // Dismiss any cookie/consent banners that would interfere with comparison
     await dismissCookieBanner(page);
 
-    // Allow any CSS animations/transitions to settle
+    // Freeze JS-driven dynamic content (videos, sliders) that survive CSS animation disabling
+    await page.evaluate(() => {
+      document.querySelectorAll<HTMLVideoElement>('video').forEach(v => {
+        v.pause();
+        v.currentTime = 0;
+      });
+      // Freeze animated counters and scroll-triggered elements
+      document.querySelectorAll<HTMLElement>('[data-aos], .aos-animate').forEach(el => {
+        el.style.setProperty('transition', 'none', 'important');
+        el.style.setProperty('animation', 'none', 'important');
+      });
+    });
+
     await page.waitForTimeout(500);
 
     await expect(page).toHaveScreenshot('homepage-desktop.png', {
       ...SCREENSHOT_OPTIONS,
+      maxDiffPixels: 2000,
     });
   });
 

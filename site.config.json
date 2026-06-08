@@ -5,8 +5,13 @@
     "industry":  "",
     "hasContactForm":  true,
     "expectedNavItems":  [
-
-                         ],
+                         "Platform",
+                         "Solutions",
+                         "Resources",
+                         "Why Abstrakt",
+                         "Request Demo",
+                         "Login"
+                     ],
     "viewports":  [
                       "desktop",
                       "mobile",

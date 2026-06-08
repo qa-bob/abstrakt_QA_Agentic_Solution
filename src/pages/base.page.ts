@@ -27,9 +27,11 @@ export class BasePage {
     await this.page.goto(this.url, { waitUntil: 'domcontentloaded' });
   }
 
-  /** Wait until network activity has settled. */
+  /** Wait until network activity has settled (best-effort; pages with analytics may never reach networkidle). */
   async waitForLoad(): Promise<void> {
-    await this.page.waitForLoadState('networkidle');
+    await this.page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => {
+      // Pages with video or analytics traffic may never reach networkidle — domcontentloaded is sufficient
+    });
   }
 
   // ── Page metadata ───────────────────────────────────────────────────────────

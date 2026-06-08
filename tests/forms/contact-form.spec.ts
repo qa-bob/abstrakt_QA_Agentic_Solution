@@ -19,36 +19,13 @@ test.describe('Contact Form @forms', () => {
 
   // ── Form presence ───────────────────────────────────────────────────────────
 
-  test('contact form is present on site @forms', async ({ contactPage, siteConfig, page }) => {
-    // Check homepage first
+  test('contact form is present on site @forms', async ({ contactPage, siteConfig }) => {
     await contactPage.navigate();
     let form = await contactPage.findContactForm();
 
     if (!form) {
-      // Try /contact, /contact-us, /get-in-touch
-      const contactPaths = ['/contact', '/contact-us', '/get-in-touch', '/reach-out'];
-      for (const contactPath of contactPaths) {
-        try {
-          await page.goto(siteConfig.url.replace(/\/$/, '') + contactPath, {
-            waitUntil: 'domcontentloaded',
-            timeout: 10_000,
-          });
-          form = await contactPage.findContactForm();
-          if (form) break;
-        } catch {
-          // Path doesn't exist — try next
-        }
-      }
-    }
-
-    if (!form) {
-      // Also check if there's a "Contact" link in nav to follow
-      const contactLink = page.locator('a').filter({ hasText: /contact/i }).first();
-      if (await contactLink.count() > 0) {
-        await contactLink.click();
-        await page.waitForLoadState('domcontentloaded');
-        form = await contactPage.findContactForm();
-      }
+      await contactPage.navigateToContactPage();
+      form = await contactPage.findContactForm();
     }
 
     expect(
@@ -60,18 +37,9 @@ test.describe('Contact Form @forms', () => {
 
   // ── Required fields ─────────────────────────────────────────────────────────
 
-  test('contact form has required fields (name, email) @forms', async ({ contactPage, siteConfig, page }) => {
-    // Navigate to find the form
-    await contactPage.navigate();
-    let form = await contactPage.findContactForm();
-
-    if (!form) {
-      await page.goto(siteConfig.url.replace(/\/$/, '') + '/contact', {
-        waitUntil: 'domcontentloaded',
-        timeout: 10_000,
-      }).catch(() => null);
-      form = await contactPage.findContactForm();
-    }
+  test('contact form has required fields (name, email) @forms', async ({ contactPage, siteConfig }) => {
+    await contactPage.navigateToContactPage();
+    const form = await contactPage.findContactForm();
 
     if (!form) {
       test.skip(true, 'No contact form found — covered by "contact form is present" test');
@@ -93,17 +61,9 @@ test.describe('Contact Form @forms', () => {
 
   // ── Submit button ───────────────────────────────────────────────────────────
 
-  test('contact form has a submit button @forms', async ({ contactPage, siteConfig, page }) => {
-    await contactPage.navigate();
-    let form = await contactPage.findContactForm();
-
-    if (!form) {
-      await page.goto(siteConfig.url.replace(/\/$/, '') + '/contact', {
-        waitUntil: 'domcontentloaded',
-        timeout: 10_000,
-      }).catch(() => null);
-      form = await contactPage.findContactForm();
-    }
+  test('contact form has a submit button @forms', async ({ contactPage, siteConfig }) => {
+    await contactPage.navigateToContactPage();
+    const form = await contactPage.findContactForm();
 
     if (!form) {
       test.skip(true, 'No contact form found');
@@ -117,16 +77,8 @@ test.describe('Contact Form @forms', () => {
   // ── Labels and placeholders ─────────────────────────────────────────────────
 
   test('form fields have proper labels or placeholders @forms', async ({ contactPage, siteConfig, page }) => {
-    await contactPage.navigate();
-    let form = await contactPage.findContactForm();
-
-    if (!form) {
-      await page.goto(siteConfig.url.replace(/\/$/, '') + '/contact', {
-        waitUntil: 'domcontentloaded',
-        timeout: 10_000,
-      }).catch(() => null);
-      form = await contactPage.findContactForm();
-    }
+    await contactPage.navigateToContactPage();
+    const form = await contactPage.findContactForm();
 
     if (!form) {
       test.skip(true, 'No contact form found');
@@ -179,16 +131,8 @@ test.describe('Contact Form @forms', () => {
     siteConfig,
     page,
   }) => {
-    await contactPage.navigate();
-    let form = await contactPage.findContactForm();
-
-    if (!form) {
-      await page.goto(siteConfig.url.replace(/\/$/, '') + '/contact', {
-        waitUntil: 'domcontentloaded',
-        timeout: 10_000,
-      }).catch(() => null);
-      form = await contactPage.findContactForm();
-    }
+    await contactPage.navigateToContactPage();
+    const form = await contactPage.findContactForm();
 
     if (!form) {
       test.skip(true, 'No contact form found');
@@ -201,10 +145,13 @@ test.describe('Contact Form @forms', () => {
       return;
     }
 
-    // Click submit without filling any fields
-    const submitBtn = form
-      .locator('button[type="submit"], input[type="submit"], button:not([type="button"]):not([type="reset"])')
-      .first();
+    // Skip if form is an embedded provider — inputs don't render headlessly so
+    // we cannot interact with the submit button via Playwright.
+    const isEmbedded = await contactPage.hasEmbeddedProvider();
+    if (isEmbedded) {
+      test.skip(true, 'Embedded form provider (HubSpot/Pardot etc.) — validation interaction not testable headlessly');
+      return;
+    }
 
     // Intercept any navigation that would result from form submission
     let navigationTriggered = false;
@@ -214,7 +161,8 @@ test.describe('Contact Form @forms', () => {
       }
     });
 
-    await submitBtn.click({ force: true });
+    // Click submit (searches all frames to handle srcdoc/iframe-embedded forms)
+    await contactPage.clickSubmitButton();
 
     // Wait briefly to allow validation messages to appear
     await page.waitForTimeout(500);
@@ -225,16 +173,19 @@ test.describe('Contact Form @forms', () => {
       'Clicking submit on an empty form should NOT navigate away (validation should prevent submission)'
     ).toBeFalsy();
 
-    // Check for HTML5 validation API on required fields
-    const firstRequired = form.locator('[required]').first();
-    if (await firstRequired.count() > 0) {
-      const isValid = await firstRequired.evaluate<boolean>((el) => {
-        return (el as HTMLInputElement).validity?.valid ?? true;
-      });
-      expect(
-        isValid,
-        'Required fields should be invalid when empty (browser validation)'
-      ).toBeFalsy();
+    // Check for HTML5 validation API on required fields (search all frames)
+    for (const frame of page.frames()) {
+      const firstRequired = frame.locator('[required]').first();
+      if (await firstRequired.count() > 0) {
+        const isValid = await firstRequired.evaluate<boolean>((el) => {
+          return (el as HTMLInputElement).validity?.valid ?? true;
+        });
+        expect(
+          isValid,
+          'Required fields should be invalid when empty (browser validation)'
+        ).toBeFalsy();
+        break;
+      }
     }
   });
 });

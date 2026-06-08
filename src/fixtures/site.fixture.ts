@@ -14,6 +14,8 @@ import { loadSiteConfig, type SiteConfig } from '@types/site-config.types';
 import { HomePage } from '@pages/home.page';
 import { NavigationPage } from '@pages/navigation.page';
 import { ContactFormPage } from '@pages/contact.page';
+import { ProductPage } from '@pages/product.page';
+import { CustomerStoriesPage } from '@pages/customer-stories.page';
 
 // ── Fixture type definitions ─────────────────────────────────────────────────
 
@@ -26,6 +28,10 @@ export interface Fixtures {
   navigationPage: NavigationPage;
   /** ContactFormPage page object (does not auto-navigate) */
   contactPage: ContactFormPage;
+  /** ProductPage — generic POM for product and solution pages (does not auto-navigate) */
+  productPage: ProductPage;
+  /** CustomerStoriesPage — POM for the customer stories listing and story pages (does not auto-navigate) */
+  customerStoriesPage: CustomerStoriesPage;
 }
 
 // ── Extended test object ─────────────────────────────────────────────────────
@@ -66,6 +72,24 @@ export const test = base.extend<Fixtures>({
   contactPage: async ({ page, siteConfig }, use) => {
     const contactPage = new ContactFormPage(page, siteConfig);
     await use(contactPage);
+  },
+
+  /**
+   * productPage — generic page object for product and solution pages.
+   * Call productPage.navigateTo(path) inside the test to land on the right page.
+   */
+  productPage: async ({ page, siteConfig }, use) => {
+    const productPage = new ProductPage(page, siteConfig);
+    await use(productPage);
+  },
+
+  /**
+   * customerStoriesPage — page object for the customer stories listing and story pages.
+   * Call customerStoriesPage.navigate() or navigateToStory(href) inside the test.
+   */
+  customerStoriesPage: async ({ page, siteConfig }, use) => {
+    const customerStoriesPage = new CustomerStoriesPage(page, siteConfig);
+    await use(customerStoriesPage);
   },
 });
 
