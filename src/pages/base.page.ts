@@ -7,7 +7,7 @@
  */
 
 import { type Page, type Locator } from '@playwright/test';
-import type { SiteConfig } from '@types/site-config.types';
+import type { SiteConfig } from '@site-types/site-config.types';
 
 export class BasePage {
   readonly page: Page;
@@ -27,10 +27,10 @@ export class BasePage {
     await this.page.goto(this.url, { waitUntil: 'domcontentloaded' });
   }
 
-  /** Wait until network activity has settled (best-effort; pages with analytics may never reach networkidle). */
+  /** Wait until the page and its subresources have loaded (best-effort). */
   async waitForLoad(): Promise<void> {
-    await this.page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => {
-      // Pages with video or analytics traffic may never reach networkidle — domcontentloaded is sufficient
+    await this.page.waitForLoadState('load', { timeout: 10_000 }).catch(() => {
+      // A slow third-party asset should not fail the test — domcontentloaded is sufficient
     });
   }
 
